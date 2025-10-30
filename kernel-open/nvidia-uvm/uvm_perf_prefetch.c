@@ -55,10 +55,15 @@ static unsigned uvm_perf_prefetch_threshold  = UVM_PREFETCH_THRESHOLD_DEFAULT;
 // logic
 static unsigned uvm_perf_prefetch_min_faults = UVM_PREFETCH_MIN_FAULTS_DEFAULT;
 
+// Enable/disable debug logging for faults and prefetches
+// 0 = disabled, 1 = enabled
+static unsigned uvm_perf_prefetch_debug_logging = 1;
+
 // Module parameters for the tunables
 module_param(uvm_perf_prefetch_enable, uint, S_IRUGO);
 module_param(uvm_perf_prefetch_threshold, uint, S_IRUGO);
 module_param(uvm_perf_prefetch_min_faults, uint, S_IRUGO);
+module_param(uvm_perf_prefetch_debug_logging, uint, S_IRUGO|S_IWUSR);
 
 static bool g_uvm_perf_prefetch_enable;
 static unsigned g_uvm_perf_prefetch_threshold;
@@ -498,6 +503,28 @@ void uvm_perf_prefetch_get_hint_va_block(uvm_va_block_t *va_block,
 
         if (pending_prefetch_pages > 0)
             out_hint->residency = va_block->prefetch_info.last_migration_proc_id;
+    }
+
+    // Debug logging for faults and prefetches
+    if (uvm_perf_prefetch_debug_logging) {
+        uvm_page_index_t page_index;
+
+        // Log all faulted pages
+        uvm_for_each_va_block_page_in_region_mask(page_index, faulted_pages, faulted_region) {
+            NvU64 fault_addr = va_block->start + page_index * PAGE_SIZE;
+            printk(KERN_INFO "nvidia-uvm: UVM_FAULT: addr=0x%llx block_start=0x%llx page_idx=%u new_residency=%u pid=%d\n",
+                   fault_addr, va_block->start, page_index, uvm_id_value(new_residency), current->pid);
+        }
+
+        // Log all prefetch pages (if any)
+        if (out_hint->residency != UVM_ID_INVALID) {
+            uvm_for_each_set_bit(page_index, prefetch_pages, PAGES_PER_UVM_VA_BLOCK) {
+                NvU64 prefetch_addr = va_block->start + page_index * PAGE_SIZE;
+                printk(KERN_INFO "nvidia-uvm: UVM_PREFETCH: addr=0x%llx block_start=0x%llx page_idx=%u dst=%u count=%u pid=%d\n",
+                       prefetch_addr, va_block->start, page_index,
+                       uvm_id_value(out_hint->residency), pending_prefetch_pages, current->pid);
+            }
+        }
     }
 }
 

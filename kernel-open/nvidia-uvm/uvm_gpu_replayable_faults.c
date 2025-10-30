@@ -115,6 +115,9 @@ module_param(uvm_perf_fault_max_throttle_per_service, uint, S_IRUGO);
 static unsigned uvm_perf_fault_coalesce = 1;
 module_param(uvm_perf_fault_coalesce, uint, S_IRUGO);
 
+// External debug logging parameter defined in uvm_perf_prefetch.c
+extern unsigned uvm_perf_prefetch_debug_logging;
+
 // This function is used for both the initial fault buffer initialization and
 // the power management resume path.
 static void fault_buffer_reinit_replayable_faults(uvm_parent_gpu_t *parent_gpu)
@@ -2257,6 +2260,18 @@ static NV_STATUS service_fault_batch(uvm_parent_gpu_t *parent_gpu,
         uvm_gpu_va_space_t *gpu_va_space;
 
         UVM_ASSERT(current_entry->va_space);
+
+        // Debug logging for raw fault information
+        if (uvm_perf_prefetch_debug_logging && service_mode == FAULT_SERVICE_MODE_REGULAR) {
+            printk(KERN_INFO "nvidia-uvm: UVM_FAULT_SERVICE: addr=0x%llx gpu=%u type=%d access=%d timestamp=%llu utlb=%u pid=%d\n",
+                   current_entry->fault_address,
+                   uvm_id_value(current_entry->gpu->id),
+                   current_entry->fault_type,
+                   current_entry->fault_access_type,
+                   current_entry->timestamp,
+                   current_entry->fault_source.utlb_id,
+                   current->pid);
+        }
 
         if (current_entry->va_space != va_space) {
             if (prev_gpu_va_space) {
