@@ -31,6 +31,10 @@
 #include "uvm_va_range.h"
 #include "uvm_test.h"
 
+// Tracepoint support
+#define CREATE_TRACE_POINTS
+#include "uvm_trace.h"
+
 //
 // Tunables for prefetch detection/prevention (configurable via module parameters)
 //
@@ -39,7 +43,7 @@
 static unsigned uvm_perf_prefetch_enable = 1;
 
 // TODO: Bug 1778037: [uvm] Use adaptive threshold for page prefetching
-#define UVM_PREFETCH_THRESHOLD_DEFAULT 51
+#define UVM_PREFETCH_THRESHOLD_DEFAULT 100 // TODO: Changed here from 51 to 100 to disable prefetching by default
 
 // Percentage of children subregions that need to be resident in order to
 // trigger prefetching of the remaining subregions
@@ -57,7 +61,7 @@ static unsigned uvm_perf_prefetch_min_faults = UVM_PREFETCH_MIN_FAULTS_DEFAULT;
 
 // Enable/disable debug logging for faults and prefetches
 // 0 = disabled, 1 = enabled
-static unsigned uvm_perf_prefetch_debug_logging = 1;
+unsigned uvm_perf_prefetch_debug_logging = 0;
 
 // Module parameters for the tunables
 module_param(uvm_perf_prefetch_enable, uint, S_IRUGO);
@@ -505,20 +509,43 @@ void uvm_perf_prefetch_get_hint_va_block(uvm_va_block_t *va_block,
             out_hint->residency = va_block->prefetch_info.last_migration_proc_id;
     }
 
+    // Tracepoints for eBPF profiling (always enabled)
+    {
+        uvm_page_index_t page_index;
+        u64 timestamp = ktime_get_ns();
+
+        // Trace all faulted pages
+        for_each_va_block_page_in_region_mask (page_index, faulted_pages, faulted_region) {
+            NvU64 fault_addr = va_block->start + page_index * PAGE_SIZE;
+            trace_uvm_page_fault(fault_addr, va_block->start, page_index,
+                                uvm_id_value(new_residency), current->pid, timestamp);
+        }
+
+        // Trace all prefetch pages (if any)
+        if (!UVM_ID_IS_INVALID(out_hint->residency)) {
+            for_each_va_block_page_in_mask(page_index, prefetch_pages, va_block) {
+                NvU64 prefetch_addr = va_block->start + page_index * PAGE_SIZE;
+                trace_uvm_page_prefetch(prefetch_addr, va_block->start, page_index,
+                                       uvm_id_value(out_hint->residency),
+                                       pending_prefetch_pages, current->pid, timestamp);
+            }
+        }
+    }
+
     // Debug logging for faults and prefetches
     if (uvm_perf_prefetch_debug_logging) {
         uvm_page_index_t page_index;
 
         // Log all faulted pages
-        uvm_for_each_va_block_page_in_region_mask(page_index, faulted_pages, faulted_region) {
+        for_each_va_block_page_in_region_mask (page_index, faulted_pages, faulted_region) {
             NvU64 fault_addr = va_block->start + page_index * PAGE_SIZE;
             printk(KERN_INFO "nvidia-uvm: UVM_FAULT: addr=0x%llx block_start=0x%llx page_idx=%u new_residency=%u pid=%d\n",
                    fault_addr, va_block->start, page_index, uvm_id_value(new_residency), current->pid);
         }
 
         // Log all prefetch pages (if any)
-        if (out_hint->residency != UVM_ID_INVALID) {
-            uvm_for_each_set_bit(page_index, prefetch_pages, PAGES_PER_UVM_VA_BLOCK) {
+        if (!UVM_ID_IS_INVALID(out_hint->residency)) {
+            for_each_va_block_page_in_mask(page_index, prefetch_pages, va_block) {
                 NvU64 prefetch_addr = va_block->start + page_index * PAGE_SIZE;
                 printk(KERN_INFO "nvidia-uvm: UVM_PREFETCH: addr=0x%llx block_start=0x%llx page_idx=%u dst=%u count=%u pid=%d\n",
                        prefetch_addr, va_block->start, page_index,
